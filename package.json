@@ -1,31 +1,44 @@
-{
-  "name": "s1-precog",
-  "version": "0.1.4",
-  "description": "Asymmetric AI delegation gateway pairing cloud reasoning with local GPU execution.",
-  "license": "MIT",
-  "type": "module",
-  "bin": {
-    "s1-precog": "./dist/cli.js",
-    "codex-s1": "./dist/cli.js"
-  },
-  "engines": {
-    "node": ">=22.0.0"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/set-cli-permissions.mjs",
-    "prepack": "npm run build",
-    "start": "node dist/cli.js serve",
-    "test": "npm run build && node --test tests/mcp.test.mjs"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "onnxruntime-node": "^1.30.0",
-    "typescript": "^5.0.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0"
-  },
-  "files": [
-    "dist"
-  ]
+﻿{
+    "name":  "s1-precog",
+    "version":  "0.1.4",
+    "description":  "Asymmetric AI delegation gateway pairing cloud reasoning with local GPU execution.",
+    "license":  "MIT",
+    "type":  "module",
+    "bin":  {
+                "s1-precog":  "./dist/cli.js",
+                "codex-s1":  "./dist/cli.js"
+            },
+    "engines":  {
+                    "node":  "\u003e=22.0.0"
+                },
+    "scripts":  {
+                    "build":  "tsc -p tsconfig.json \u0026\u0026 node scripts/set-cli-permissions.mjs",
+                    "prepack":  "npm run build",
+                    "start":  "node dist/cli.js serve",
+                    "test":  "npm run build \u0026\u0026 node --test tests/mcp.test.mjs"
+                },
+    "dependencies":  {
+                         "@modelcontextprotocol/sdk":  "^1.0.0",
+                         "onnxruntime-node":  "^1.30.0",
+                         "typescript":  "^5.0.0"
+                     },
+    "devDependencies":  {
+                            "@types/node":  "^22.0.0"
+                        },
+    "files":  [
+                  "dist"
+              ],
+    "keywords":  [
+                     "mcp",
+                     "model-context-protocol",
+                     "local-llm",
+                     "lm-studio",
+                     "ollama",
+                     "agent",
+                     "coding-assistant",
+                     "onnx",
+                     "system-1",
+                     "claude-desktop",
+                     "cursor"
+                 ]
 }
