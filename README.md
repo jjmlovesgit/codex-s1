@@ -14,7 +14,7 @@ Codex S1 is a local Model Context Protocol (MCP) server exposing a `delegate_wor
 
 The server is designed for local developer workflows. It keeps source files and token accounting on the local machine while providing a compact receipt to the calling MCP client.
 
-## Pay cloud tokens for thinking, and you use local silicon for typing
+## Pay cloud tokens for thinking, and use local silicon for typing
 
 What “everyone does” is toggle a dropdown: you either run 100% on Claude/GPT, or you switch to Ollama and lose frontier-grade reasoning.
 
