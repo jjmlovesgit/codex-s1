@@ -1,0 +1,8 @@
+node_modules/
+dist/
+savings-ledger.json
+savings-ledger.json.*.tmp
+.codex/sessions/
+*.log
+.codex-stage/
+.DS_Store

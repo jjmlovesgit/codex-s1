@@ -1,0 +1,27 @@
+{
+  "name": "codex-s1",
+  "version": "0.1.0",
+  "description": "Asymmetric AI delegation gateway pairing cloud reasoning with local GPU execution.",
+  "type": "module",
+  "bin": {
+    "codex-s1": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/set-cli-permissions.mjs",
+    "start": "node dist/cli.js serve",
+    "test": "npm run build && node --test tests/mcp.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "typescript": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  },
+  "files": [
+    "dist"
+  ]
+}

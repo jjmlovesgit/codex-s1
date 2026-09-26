@@ -1,0 +1,13 @@
+{
+  "activeProvider": "heuristic",
+  "providers": {
+    "heuristic": {},
+    "http-sidecar": {
+      "endpoint": "http://127.0.0.1:8765/route",
+      "timeoutMs": 1000
+    },
+    "laya-onnx": {
+      "modelPath": ""
+    }
+  }
+}

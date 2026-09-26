@@ -1,0 +1,30 @@
+{
+  "activeBenchmark": "gpt-5.6-luna",
+  "benchmarks": {
+    "gpt-5.6-luna": {
+      "name": "GPT-5.6 Luna High",
+      "promptPerMillion": 2.5,
+      "completionPerMillion": 10.0
+    },
+    "gpt-4o": {
+      "name": "GPT-4o Standard",
+      "promptPerMillion": 2.5,
+      "completionPerMillion": 10.0
+    },
+    "claude-3-5-sonnet": {
+      "name": "Claude 3.5 Sonnet",
+      "promptPerMillion": 3.0,
+      "completionPerMillion": 15.0
+    },
+    "deepseek-v3": {
+      "name": "DeepSeek V3",
+      "promptPerMillion": 0.27,
+      "completionPerMillion": 1.1
+    }
+  },
+  "cloudRates": {
+    "inputPerMillion": 0.14,
+    "inputCachedPerMillion": 0.014,
+    "outputPerMillion": 0.28
+  }
+}
