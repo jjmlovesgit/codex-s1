@@ -6,7 +6,7 @@
 [![GitHub](https://img.shields.io/badge/GitHub-jjmlovesgit%2Fcodex--s1-181717?style=flat-square&logo=github)](https://github.com/jjmlovesgit/codex-s1)
 [![MCP](https://img.shields.io/badge/MCP-1.0.0-purple?style=flat-square)](https://modelcontextprotocol.io/)
 
-Codex S1 is an asymmetric AI delegation gateway. It connects cloud frontier reasoning models from OpenAI and Anthropic with local GPU workers running locally through LM Studio or Ollama. Cloud models handle architectural judgment while local models handle implementation and verification close to the developer's workspace.
+Codex S1 is an asymmetric AI delegation gateway. It connects cloud frontier reasoning models from OpenAI and Anthropic and others with local GPU workers. Cloud models handle architectural tasks while local models handle implementation and verification close to the developer's workspace.
 
 ## Overview
 
