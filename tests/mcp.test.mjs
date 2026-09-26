@@ -8,10 +8,45 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { delegateWorker, extractAndEmitFiles, parseFileBlocks, runSandboxVerification, SavingsTracker, createServer } from '../dist/index.js';
+import { ledgerPath } from '../dist/ledger-path.js';
+
+test('package exposes the production binary and legacy alias', () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.name, 's1-precog');
+  assert.equal(pkg.bin['s1-precog'], './dist/cli.js');
+  assert.equal(pkg.bin['codex-s1'], pkg.bin['s1-precog']);
+  assert.equal(fs.existsSync(new URL('../dist/cli.js', import.meta.url)), true);
+});
+
+test('telemetry migration copies the legacy ledger once and preserves existing new data', t => {
+  const dir = workspace(t);
+  const legacy = path.join(dir, '.codex-s1');
+  fs.mkdirSync(legacy);
+  fs.writeFileSync(path.join(legacy, 'ledger.json'), '{"totalTurns":7}');
+  const current = ledgerPath(dir);
+  assert.equal(current, path.join(dir, '.s1-precog', 'ledger.json'));
+  assert.equal(fs.readFileSync(current, 'utf8'), '{"totalTurns":7}');
+  fs.writeFileSync(current, '{"totalTurns":8}');
+  assert.equal(fs.readFileSync(ledgerPath(dir), 'utf8'), '{"totalTurns":8}');
+});
+
+test('telemetry migration recognizes the historical savings ledger filename', t => {
+  const dir = workspace(t);
+  const legacy = path.join(dir, '.codex-s1');
+  fs.mkdirSync(legacy);
+  fs.writeFileSync(path.join(legacy, 'savings-ledger.json'), '{"totalTurns":3}');
+  assert.equal(fs.readFileSync(ledgerPath(dir), 'utf8'), '{"totalTurns":3}');
+});
 
 function workspace(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexlaya-test-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const previousHome = process.env.S1_PRECOG_HOME;
+  process.env.S1_PRECOG_HOME = dir;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.S1_PRECOG_HOME;
+    else process.env.S1_PRECOG_HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
   return dir;
 }
 function completion(t, content, extra = {}) {
@@ -43,8 +78,10 @@ test('delegation emits nested TS files, verifies async assertions, and persists 
   assert.equal(receipt.operationalMetrics.estimatedCloudMessagesSaved, 1.33);
   assert.equal(receipt.operationalMetrics.savedUSD, 0.045);
   assert.equal(receipt.operationalMetrics.estimatedBytesAvoided, fs.readFileSync(path.join(dir, 'src/math.ts')).length + fs.readFileSync(path.join(dir, 'tests/math.test.ts')).length);
+  assert.equal(fs.existsSync(path.join(dir, '.precog-stage')), true);
+  assert.equal(fs.existsSync(path.join(dir, '.codex-stage')), false);
   await delegateWorker(params);
-  const ledger = JSON.parse(fs.readFileSync(path.join(dir, 'savings-ledger.json'), 'utf8'));
+  const ledger = JSON.parse(fs.readFileSync(path.join(dir, '.s1-precog', 'ledger.json'), 'utf8'));
   assert.equal(ledger.totalTurns, 2);
   assert.equal(ledger.totalTokens, 24000);
   assert.equal(ledger.workerTurns, 2);
@@ -62,9 +99,25 @@ test('parser supports file headers, markers outside fences, CRLF, bare markers a
   assert.throws(() => parseFileBlocks('```js\na\n```', ['a.js', 'b.js']), /unambiguously/);
 });
 
+test('parser accepts balanced 3-5 angle delimiters, whitespace, alternate end tags, and line endings', () => {
+  const cases = [
+    ['<<<FILE: src/index.ts>>>\nconst a = 1;\n<<<END_FILE>>>\n', 'const a = 1;\n'],
+    ['<<<<FILE: src/index.ts>>>>\r\nconst b = 2;\r\n<<<<END_FILE>>>>\r\n', 'const b = 2;\n'],
+    ['<<< FILE: `src/index.ts` >>>\nconst c = 3;\n<<< FILE_END >>>\n', 'const c = 3;\n'],
+    ['<<<<<  FILE:  src/index.ts  >>>>>\r\nconst d = 4;\r\n<<<<< END >>>>>\r\n', 'const d = 4;\n'],
+  ];
+  for (const [emission, expectedCode] of cases) {
+    assert.deepEqual(parseFileBlocks(emission, ['src/index.ts']), [{ name: 'src/index.ts', code: expectedCode }]);
+  }
+  assert.deepEqual(
+    parseFileBlocks('<<<FILE: src/index.ts>>>\nconst comparison = a < b && c > d;\n<<<END_FILE>>>\n', ['src/index.ts']),
+    [{ name: 'src/index.ts', code: 'const comparison = a < b && c > d;\n' }],
+  );
+});
+
 test('emission rejects traversal, duplicate destinations, ledger writes, and junction escapes before writing', t => {
   const dir = workspace(t);
-  for (const name of ['../escape.js', 'savings-ledger.json', 'file.js:stream']) {
+  for (const name of ['../escape.js', 'savings-ledger.json', '.s1-precog/ledger.json', 'file.js:stream']) {
     assert.throws(() => extractAndEmitFiles(`// FILE: good.js\ngood\n// FILE: ${name}\nbad`, [], dir));
     assert.equal(fs.existsSync(path.join(dir, 'good.js')), false);
   }
@@ -140,7 +193,7 @@ assert.equal(1, 1);
   assert.equal(receipt.success, true, JSON.stringify(receipt));
   assert.equal(calls, 2);
   assert.deepEqual(receipt.tokens, { prompt: 30, completion: 5, total: 35, estimated: false });
-  const ledger = JSON.parse(fs.readFileSync(path.join(dir, 'savings-ledger.json'), 'utf8'));
+  const ledger = JSON.parse(fs.readFileSync(path.join(dir, '.s1-precog', 'ledger.json'), 'utf8'));
   assert.equal(ledger.totalTurns, 2);
   assert.equal(ledger.totalTokens, 35);
 });
@@ -175,7 +228,7 @@ test('ledger keeps the reference cloud math, honors custom rates, and preserves 
   const usage = { route: 'ARCHITECT_CLOUD', promptTokens: 10000, completionTokens: 2000, totalTokens: 12000, cacheHitTokens: 8000 };
   assert.equal(tracker.recordUsage(usage).costUSD, 0.000952);
   assert.equal(new SavingsTracker(dir, { inputPerMillion: 1, outputPerMillion: 2 }).recordUsage({ ...usage, route: 'WORKER_LOCAL' }).savedUSD, 0.014);
-  const file = path.join(dir, 'savings-ledger.json');
+  const file = path.join(dir, '.s1-precog', 'ledger.json');
   fs.writeFileSync(file, 'broken ledger');
   assert.throws(() => tracker.recordUsage(usage));
   assert.equal(fs.readFileSync(file, 'utf8'), 'broken ledger');
@@ -189,6 +242,7 @@ test('MCP client receives tool schema, compact successful receipt and error rece
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
+  assert.equal(client.getServerVersion()?.name, 's1-precog');
   t.after(async () => { await client.close(); await server.close(); });
   const listed = await client.listTools();
   assert.equal(listed.tools[0].name, 'delegate_worker');
@@ -205,6 +259,7 @@ test('built entrypoint supports a real stdio MCP handshake with clean stdout', a
   const transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../dist/index.js', import.meta.url))], stderr: 'pipe' });
   t.after(() => client.close());
   await client.connect(transport);
+  assert.equal(client.getServerVersion()?.name, 's1-precog');
   const tools = await client.listTools();
   assert.equal(tools.tools[0].name, 'delegate_worker');
   const result = await client.callTool({ name: 'delegate_worker', arguments: { task: '' } });

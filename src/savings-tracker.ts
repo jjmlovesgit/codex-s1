@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { loadPricingConfig, resolveActivePricing, type PricingConfig } from './core/pricing.js'
 import type { OperationalMetrics } from './core/tokenLedger.js'
+import { ledgerPath } from './ledger-path.js'
 
 export interface PricingRates {
   inputPerMillion: number
@@ -85,8 +86,8 @@ export class SavingsTracker {
     }
   >()
 
-  constructor(baseDir: string = process.cwd(), rates?: Partial<PricingRates>, pricingConfig?: PricingConfig) {
-    this.ledgerPath = path.join(baseDir, 'savings-ledger.json')
+  constructor(baseDir?: string, rates?: Partial<PricingRates>, pricingConfig?: PricingConfig) {
+    this.ledgerPath = ledgerPath(baseDir)
     const config = pricingConfig ?? loadPricingConfig()
     const active = resolveActivePricing(config)
     const cloud = config.cloudRates ?? { inputPerMillion: active.tier.promptPerMillion, inputCachedPerMillion: active.tier.promptPerMillion, outputPerMillion: active.tier.completionPerMillion }

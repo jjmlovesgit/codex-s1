@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
-import path from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createServer } from './index.js';
 import { loadPricingConfig } from './core/pricing.js';
+import { ledgerPath } from './ledger-path.js';
 
 interface OperationalMetrics {
   contextTokensShielded?: number;
@@ -26,13 +26,13 @@ interface Ledger {
   totalSavedUSD?: number;
 }
 
-function readLedger(workspace = process.cwd()): Ledger {
-  const ledgerPath = path.join(workspace, 'savings-ledger.json');
+function readLedger(): Ledger {
+  const file = ledgerPath();
   try {
-    return JSON.parse(fs.readFileSync(ledgerPath, 'utf8')) as Ledger;
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as Ledger;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to read ${ledgerPath}: ${message}`);
+    throw new Error(`Unable to read ${file}: ${message}`);
   }
 }
 
@@ -59,7 +59,7 @@ function renderStats(ledger: Ledger): string {
     ['Estimated avoided USD', `$${numeric(metrics.savedUSD ?? ledger.totalSavedUSD).toFixed(6)}`],
   ];
   const width = Math.max(...rows.map(([label]) => label.length));
-  const lines = ['Codex S1 statistics', ''];
+  const lines = ['S1 Precog statistics', ''];
   for (const [label, value] of rows) {
     lines.push(`${label.padEnd(width)}  ${value}`);
   }
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
 }
 
 main().catch(error => {
-  console.error(`codex-s1: ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`[s1-precog] ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 });
 

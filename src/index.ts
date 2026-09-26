@@ -12,6 +12,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { PROFILES } from './profiles.js';
 import { SavingsTracker } from './savings-tracker.js';
+import { ledgerPath as resolveLedgerPath } from './ledger-path.js';
 import { TokenLedger, loadPricingConfig, type OperationalMetrics } from './core/tokenLedger.js';
 import { buildWorkerMessages, HARDENED_WORKER_SYSTEM_PROMPT, WORKER_FILE_END, WORKER_FILE_START, WORKER_FEW_SHOTS, WORKER_STOP_TOKENS } from './prompts/workerPrompt.js';
 import { activeEngine, createDecisionEngine, engineRegistry, loadDecisionConfig } from './decision/factory.js';
@@ -21,6 +22,7 @@ export { PROFILES, SavingsTracker, TokenLedger, loadPricingConfig };
 export type { OperationalMetrics, TokenUsage, PricingConfig, PricingTier } from './core/tokenLedger.js';
 export { buildWorkerMessages, HARDENED_WORKER_SYSTEM_PROMPT, WORKER_FILE_END, WORKER_FILE_START, WORKER_FEW_SHOTS, WORKER_STOP_TOKENS } from './prompts/workerPrompt.js';
 export { activeEngine, createDecisionEngine, engineRegistry, loadDecisionConfig };
+export { getExecutionProviders, createLayaSession } from './router/engine.js';
 export type { ISystemOneEngine, RoutingDecision, RoutingState, RoutingDestination } from './decision/types.js';
 
 export const DELEGATE_WORKER_SCHEMA = {
@@ -133,10 +135,10 @@ function enforceFileAllowlist(blocks: FileBlock[], targetFiles: string[]): FileB
 
 export function parseFileBlocks(content: string, targetFiles: string[] = []): FileBlock[] {
   const text = content.replace(/\r\n/g, '\n');
-  const cleanName = (name: string) => name.trim().replace(/^["']|["']$/g, '');
+  const cleanName = (name: string) => name.trim().replace(/^["'`]+|["'`]+$/g, '').trim();
   const finish = (blocks: FileBlock[]) => enforceFileAllowlist(blocks, targetFiles);
-  const strictStart = /^<<<FILE:\s*([^>\r\n]+?)>>>[ \t]*\r?$/gm;
-  const strictEnd = /^<<<END_FILE>>>[ \t]*\r?$/gm;
+  const strictStart = /^<{3,5}\s*FILE:\s*([^>\r\n]+?)\s*>{3,5}[ \t]*\r?$/gm;
+  const strictEnd = /^<{3,5}\s*(?:END_FILE|FILE_END|END)\s*>{3,5}[ \t]*\r?$/gm;
   const hasStrictDelimiter = strictStart.test(text) || strictEnd.test(text);
   if (hasStrictDelimiter) {
     const strictFiles: FileBlock[] = [];
@@ -236,11 +238,11 @@ class FileEmissionError extends Error {
 export function extractAndEmitFiles(content: string, targetFiles: string[] = [], baseDir = process.cwd()): { filesWritten: FileEmissionResult[] } {
   const blocks = parseFileBlocks(content, targetFiles);
   const destinations = new Set<string>();
-  const reserved = workspaceFile(baseDir, 'savings-ledger.json');
+  const reserved = [workspaceFile(baseDir, 'savings-ledger.json'), workspaceFile(baseDir, '.s1-precog/ledger.json')];
   const prepared = blocks.map(block => {
     const destination = workspaceFile(baseDir, block.name);
     const key = process.platform === 'win32' ? destination.toLowerCase() : destination;
-    if (key === (process.platform === 'win32' ? reserved.toLowerCase() : reserved) || destination.startsWith(`${reserved}.`)) throw new Error('Worker cannot overwrite the savings ledger.');
+    if (reserved.some(file => key === (process.platform === 'win32' ? file.toLowerCase() : file) || destination.startsWith(`${file}.`))) throw new Error('Worker cannot overwrite the savings ledger.');
     if (destinations.has(key)) throw new Error(`Duplicate emitted file: ${block.name}`);
     destinations.add(key);
     return { ...block, destination };
@@ -259,9 +261,9 @@ export function extractAndEmitFiles(content: string, targetFiles: string[] = [],
 }
 
 function createStagingDirectory(workspace: string): string {
-  const parent = workspaceFile(workspace, '.codex-stage');
+  const parent = workspaceFile(workspace, '.precog-stage');
   fs.mkdirSync(parent, { recursive: true });
-  const staging = workspaceFile(workspace, path.posix.join('.codex-stage', randomUUID()));
+  const staging = workspaceFile(workspace, path.posix.join('.precog-stage', randomUUID()));
   fs.mkdirSync(staging, { recursive: true });
   return staging;
 }
@@ -467,14 +469,14 @@ export async function delegateWorker(input: DelegateWorkerParams) {
     const workspace = path.resolve(params.workspacePath ?? process.cwd());
     params.targetFiles = normalizeTargetFiles(params.targetFiles ?? []);
     if (params.targetFiles.length === 0) throw new Error('targetFiles must contain at least one workspace-relative path.');
-    ledgerPath = workspaceFile(workspace, 'savings-ledger.json');
+    ledgerPath = resolveLedgerPath();
     fs.mkdirSync(workspace, { recursive: true });
     routingDecision = await activeEngine.route({ task: params.task, targetFiles: params.targetFiles });
     if (routingDecision.destination === 'cloud_architect') {
       return { success: false, status: 'ROUTE_CLOUD', routingDecision };
     }
     stagingDir = createStagingDirectory(workspace);
-    tracker = new SavingsTracker(workspace);
+    tracker = new SavingsTracker();
     benchmark = tracker.getBenchmark();
     tokenLedger = new TokenLedger();
     finalizeMetrics = (fileContents?: string[]): OperationalMetrics => {
@@ -587,7 +589,7 @@ export async function delegateWorker(input: DelegateWorkerParams) {
 }
 
 export function createServer(): Server {
-  const server = new Server({ name: 'codexlaya', version: '0.1.0' }, { capabilities: { tools: {} } });
+  const server = new Server({ name: 's1-precog', version: '0.1.0' }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [DELEGATE_WORKER_SCHEMA] }));
   // Serialize writes/ledger updates and verification within this server instance.
   let queue = Promise.resolve();
@@ -605,14 +607,8 @@ export function createServer(): Server {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   createServer().connect(new StdioServerTransport()).catch(error => {
-    console.error(`CodexLaya startup failed: ${errorMessage(error)}`);
+    console.error(`[s1-precog] startup failed: ${errorMessage(error)}`);
     process.exitCode = 1;
   });
 }
-
-
-
-
-
-
 
