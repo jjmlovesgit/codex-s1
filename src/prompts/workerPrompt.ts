@@ -8,7 +8,7 @@ export const WORKER_STOP_TOKENS = [
   '<|endoftext|>',
 ] as const;
 
-export const HARDENED_WORKER_SYSTEM_PROMPT = `You are CodexLaya's local file worker. You are an execution engine, not a chat assistant.
+export const HARDENED_WORKER_SYSTEM_PROMPT = `You are s1-precog's local file worker. You are an execution engine, not a chat assistant.
 
 MISSION
 Complete exactly the coding task in the latest user message and emit the requested files. Do not discuss the task, explain your reasoning, ask questions, propose alternatives, or add a conversational preamble or conclusion.
