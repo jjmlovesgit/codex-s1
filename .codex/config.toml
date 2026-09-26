@@ -1,7 +1,1 @@
-[mcp_servers.codex-s1]
-command = "codex-s1"
-args = ["serve"]
-
-[mcp_servers.codex-s1.env]
-LM_STUDIO_ENDPOINT = "http://127.0.0.1:1234/v1"
-LM_STUDIO_MODEL = "qwen2.5-coder-32b-instruct"
+# The s1-precog MCP server and its model are configured in the user-level Codex config.
