@@ -5,15 +5,20 @@
 [![Node.js](https://img.shields.io/node/v/s1-precog.svg?style=flat-square&color=339933)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/MCP-1.0.0-purple?style=flat-square)](https://modelcontextprotocol.io/)
 
-S1 Precog is an asymmetric AI delegation gateway. It connects cloud frontier reasoning models from OpenAI and Anthropic with local GPU workers running locally through LM Studio or Ollama. Cloud models handle architectural judgment while local models handle implementation and verification close to the developer's workspace.
+S1 Precog is an asymmetric AI delegation gateway. It connects cloud frontier reasoning models from OpenAI, Anthropic, and others with local GPU workers running through LM Studio or Ollama. Cloud models handle architectural tasks while local models handle implementation and verification close to the developer's workspace.
 
 ## Overview
-
+> [!WARNING]
+> ### Every engineer knows the feeling:
+> You’re in the zone at 2:00 PM, you ask the model to implement a schema or write 15 unit tests, and at 2:15 PM you get hit with:
+>
+> ## *"You've reached your usage limit until 7:00 PM."*
+>
 S1 Precog is a local Model Context Protocol (MCP) server exposing a `delegate_worker` tool. A System 1 routing layer classifies work, sends implementation tasks to a local model, extracts emitted files, verifies generated tests in-process, and promotes validated output into the workspace.
 
 The server is designed for local developer workflows. It keeps source files and token accounting on the local machine while providing a compact receipt to the calling MCP client.
 
-## Why S1 Precog is different
+## Pay cloud tokens for thinking, and use local silicon for typing
 
 What “everyone does” is toggle a dropdown: you either run 100% on Claude/GPT, or you switch to Ollama and lose frontier-grade reasoning.
 
@@ -27,6 +32,16 @@ In typical tools such as Cursor, Continue, and Aider, you pick one model for the
 - A local model is inexpensive, but may struggle with complex cross-file architecture or long-horizon planning.
 
 S1 Precog assigns different jobs to different systems. The cloud model acts as the **Staff Architect** and the local GPU acts as the **Junior Implementation Worker**. The cloud model retains high-level orchestration, then calls delegate_worker when implementation, schemas, or tests need to be generated. The heavy token lifting happens on the local GPU behind 127.0.0.1, preserving cloud context for architectural reasoning.
+
+### Token count doesn't decide it; cognitive depth does.
+
+The Cloud Model is the Architect: Claude designs the interfaces and data contracts in the chat.
+
+MCP is the Dispatch: When it's time to write the 500 lines of tests or boilerplate that satisfy that interface, Claude calls delegate_worker.
+
+The Gateway is the Guard: s1-precog isolates the job to declared files, runs the typing and tests on your local GPU, verifies it in an atomic sandbox, and reports back a 1-line receipt.
+
+You keep Claude as your Staff Engineer for thinking, you offload the keyboard typing to your local GPU, and you stay in your editor without getting kicked off the API.
 
 ### 2. Silent local verification and self-correction
 
@@ -73,7 +88,7 @@ You did not build a wrapper around an inference server. You built an enforcement
 ```mermaid
 flowchart TD
     subgraph Cloud ["1. Cloud Frontier Model (Staff Architect)"]
-        A["Claude 3.7 / GPT-5.6"] -->|"delegate_worker(spec, tests, targetFiles)<br/>[~300 tokens]"| B["S1 Precog Gateway"]
+        A["Claude / GPT"] -->|"delegate_worker(spec, tests, targetFiles)<br/>[~300 tokens]"| B["S1 Precog Gateway"]
     end
 
     subgraph Gateway ["2. S1 Precog Enforcement & Staging"]
