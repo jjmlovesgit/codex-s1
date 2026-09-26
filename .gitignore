@@ -8,3 +8,5 @@ savings-ledger.json.*.tmp
 .precog-stage/
 .DS_Store
 *.tgz
+
+.codex/
