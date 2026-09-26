@@ -300,7 +300,8 @@ The build emits compiled runtime files under `dist/`. Runtime artifacts, staging
 
 ## License
 
-See `LICENSE` when distributed with the package.
+This project is licensed under the [MIT License](LICENSE).
 
+> **Note on Model Weights:** The orchestration engine, MCP server, and tooling code are licensed under MIT. If you use pre-trained ONNX models or custom local weights with `LayaOnnxEngine`, those weights remain subject to their respective creators' licensing terms.
 
 
