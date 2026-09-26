@@ -14,6 +14,94 @@ Codex S1 is a local Model Context Protocol (MCP) server exposing a `delegate_wor
 
 The server is designed for local developer workflows. It keeps source files and token accounting on the local machine while providing a compact receipt to the calling MCP client.
 
+## Why Codex S1 is different
+
+What “everyone does” is toggle a dropdown: you either run 100% on Claude/GPT, or you switch to Ollama and lose frontier-grade reasoning.
+
+**Codex S1 is not a model switcher. It is an in-flight delegation pipeline.**
+
+### 1. Hierarchical delegation instead of a flat toggle
+
+In typical tools such as Cursor, Continue, and Aider, you pick one model for the task.
+
+- A cloud frontier model burns expensive context and rate limits writing repetitive TypeScript boilerplate and test assertions.
+- A local model is inexpensive, but may struggle with complex cross-file architecture or long-horizon planning.
+
+Codex S1 assigns different jobs to different systems. The cloud model acts as the **Staff Architect** and the local GPU acts as the **Junior Implementation Worker**. The cloud model retains high-level orchestration, then calls delegate_worker when implementation, schemas, or tests need to be generated. The heavy token lifting happens on the local GPU behind 127.0.0.1, preserving cloud context for architectural reasoning.
+
+### 2. Silent local verification and self-correction
+
+When a standard local model produces a syntax error or broken import, the failure is often sent back to the cloud model, consuming another API turn and thousands of tokens.
+
+Codex S1 keeps this loop local:
+
+- Generated code runs through the hardened in-process verifier.
+- Failed tests trigger a local corrective attempt.
+- The cloud model receives the final verified code or a structured failure receipt.
+
+Cloud message turns and rate limits are insulated from local trial-and-error work.
+
+### 3. Batch-atomic workspace protection
+
+Many local coding agents write directly to the working tree. A failed generation can leave half-written files, unformatted code, or broken imports.
+
+Codex S1 writes to .codex-stage/<runId>, runs verification there, and promotes files only after the run succeeds. Failed runs are rolled back, keeping draft output out of the working tree.
+
+### 4. Mandatory allowlisting instead of rogue writes
+
+Prompt instructions such as “only edit these files” are not a filesystem security control. If a local model drifts, it may overwrite unrelated files or leave artifacts in the project root.
+
+Codex S1 enforces a programmatic invariant: if a file is not in targetFiles, emission is rejected before promotion.
+
+### 5. Honest telemetry instead of inflated vanity metrics
+
+A local model may fail several times before producing an accepted result. Counting every generated token as “saved” overstates the benefit.
+
+Codex S1 separates **accepted shielded tokens**—the output actually committed to disk—from **local retry overhead**, the GPU work spent correcting failed attempts. The ledger reports what was kept off cloud billing and what was consumed by local recovery.
+
+### The concrete difference
+
+| Workflow | Cloud API cost and turns | Workspace state on failure | Reasoning quality |
+| --- | --- | --- | --- |
+| **Pure Cloud (Claude/GPT)** | Burns 10k–30k tokens on boilerplate and test mocks | Clean, but cloud quota is consumed quickly | Frontier |
+| **Pure Local (Ollama/LM Studio)** | Free cloud usage | May leave broken code in the working tree | Prone to architectural drift |
+| **Codex S1 (Asymmetric)** | Preserves most cloud context; cloud spends roughly 300 tokens delegating | Drafts remain in .codex-stage until verification passes | **Frontier architecture plus free local generation** |
+
+You did not build a wrapper around an inference server. You built an enforcement gateway that lets frontier models safely outsource repetitive implementation work to local silicon.
+
+## Codex S1 delegation flow
+
+```mermaid
+flowchart TD
+    subgraph Cloud ["1. Cloud Frontier Model (Staff Architect)"]
+        A["Claude 3.7 / GPT-5.6"] -->|"delegate_worker(spec, tests, targetFiles)<br/>[~300 tokens]"| B["Codex S1 Gateway"]
+    end
+
+    subgraph Gateway ["2. Codex S1 Enforcement & Staging"]
+        B --> C{"Routing Engine"}
+        C -->|"Cloud Precedence<br/>(Security / Arch)"| A
+        C -->|"Implementation Task"| D["targetFiles Allowlist Guard"]
+        D --> E[".codex-stage/&lt;runId&gt;<br/>(Isolated Staging)"]
+        
+        E <-->|"Zero-cost local iteration<br/>(Prompt + Syntax fixes)"| F["Local GPU Worker<br/>LM Studio / Ollama @ 127.0.0.1"]
+        
+        E --> G["V8 Hardened Verifier<br/>(Host constructors stripped)"]
+        G -- "Test Fails" --> E
+        G -- "Test Passes" --> H["Batch-Atomic Promotion"]
+        
+        G --> I["Token Ledger<br/>(Accepted vs. Retry Waste)"]
+    end
+
+    subgraph Disk ["3. Working Tree"]
+        H --> J[("Clean Workspace<br/>(Zero broken drafts)")]
+    end
+
+    I -.->|"Verified Receipt<br/>(Preserves Cloud Turns)"| A
+
+    style Cloud fill:#1e1e2e,stroke:#89b4fa,stroke-width:2px,color:#cdd6f4
+    style Gateway fill:#181825,stroke:#f38ba8,stroke-width:2px,color:#cdd6f4
+    style Disk fill:#11111b,stroke:#a6e3a1,stroke-width:2px,color:#cdd6f4
+```
 ## Core capabilities
 
 - **Heuristic and ML routing:** A fast heuristic engine handles common decisions, while configurable HTTP sidecars and ONNX providers can route between a local worker and a cloud architect.
@@ -197,5 +285,6 @@ The build emits compiled runtime files under `dist/`. Runtime artifacts, staging
 ## License
 
 See `LICENSE` when distributed with the package.
+
 
 
