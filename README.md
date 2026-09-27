@@ -5,7 +5,7 @@
 [![Node.js](https://img.shields.io/node/v/s1-precog.svg?style=flat-square&color=339933)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/MCP-1.0.0-purple?style=flat-square)](https://modelcontextprotocol.io/)
 
-S1 Precog is an asymmetric AI delegation gateway. It connects cloud frontier reasoning models from OpenAI, Anthropic, and others with local GPU workers running through LM Studio or Ollama. Cloud models handle architectural tasks while local models handle implementation and verification close to the developer's workspace.
+S1 Precog is an asymmetric AI delegation gateway. It connects cloud frontier reasoning models from OpenAI, Anthropic, and others with local GPU workers running through LM Studio or Ollama etc. Cloud models handle architectural tasks while local models handle implementation and verification close to the developer's workspace.
 
 ## Overview
 > [!WARNING]
