@@ -81,8 +81,6 @@ S1 Precog separates **accepted shielded tokens**—the output actually committed
 | **Pure Local (Ollama/LM Studio)** | Free cloud usage | May leave broken code in the working tree | Prone to architectural drift |
 | **S1 Precog (Asymmetric)** | Preserves most cloud context; cloud spends roughly 300 tokens delegating | Drafts remain in .precog-stage until verification passes | **Frontier architecture plus free local generation** |
 
-You did not build a wrapper around an inference server. You built an enforcement gateway that lets frontier models safely outsource repetitive implementation work to local silicon.
-
 ## S1 Precog delegation flow
 
 ```mermaid
