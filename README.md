@@ -1,5 +1,23 @@
 # s1-precog
 
+[![npm version](https://img.shields.io/npm/v/s1-precog.svg?style=flat-square&color=blue)](https://www.npmjs.com/package/s1-precog)
+[![npm monthly downloads](https://img.shields.io/npm/dm/s1-precog.svg?style=flat-square&color=green)](https://www.npmjs.com/package/s1-precog)
+[![Node.js](https://img.shields.io/node/v/s1-precog.svg?style=flat-square&color=339933)](https://nodejs.org/)
+[![MCP](https://img.shields.io/badge/MCP-1.0.0-purple?style=flat-square)](https://modelcontextprotocol.io/)
+
+S1 Precog is an asymmetric AI delegation gateway. An MCP host model handles architecture while a separately configured worker implements bounded file tasks. The worker can be a local LM Studio model or a supported cloud provider; generated files are staged and verified before promotion.
+
+## Overview
+> [!WARNING]
+> ### Every engineer knows the feeling:
+> You’re in the zone at 2:00 PM, you ask the model to implement a schema or write 15 unit tests, and at 2:15 PM you get hit with:
+>
+> ## *"You've reached your usage limit until 7:00 PM."*
+>
+S1 Precog is a Model Context Protocol (MCP) server exposing a `delegate_worker` tool. A System 1 routing layer classifies work, sends implementation tasks to the selected worker, extracts emitted files, verifies generated tests in-process, and promotes validated output into the workspace.
+
+The server is designed for developer workspaces. Staging, verification, and token accounting run locally, and a compact receipt returns to the MCP client. Delegated task content is sent to the selected worker endpoint.
+
 ## Quickstart (Zero-Config Onboarding)
 
 Your MCP client configuration needs no API keys or environment variables. S1 Precog selects a saved or detected provider, then falls back to local LM Studio.
@@ -51,24 +69,6 @@ npx -y s1-precog init
 ```
 
 `init` detects TypeScript or JavaScript, ESM or CommonJS, and Next.js projects. It creates `.precog/worker.md` with worker rules and `AGENTS.md` with guidance for delegating implementation tasks. Existing custom files are preserved.
-
-[![npm version](https://img.shields.io/npm/v/s1-precog.svg?style=flat-square&color=blue)](https://www.npmjs.com/package/s1-precog)
-[![npm monthly downloads](https://img.shields.io/npm/dm/s1-precog.svg?style=flat-square&color=green)](https://www.npmjs.com/package/s1-precog)
-[![Node.js](https://img.shields.io/node/v/s1-precog.svg?style=flat-square&color=339933)](https://nodejs.org/)
-[![MCP](https://img.shields.io/badge/MCP-1.0.0-purple?style=flat-square)](https://modelcontextprotocol.io/)
-
-S1 Precog is an asymmetric AI delegation gateway. An MCP host model handles architecture while a separately configured worker implements bounded file tasks. The worker can be a local LM Studio model or a supported cloud provider; generated files are staged and verified before promotion.
-
-## Overview
-> [!WARNING]
-> ### Every engineer knows the feeling:
-> You’re in the zone at 2:00 PM, you ask the model to implement a schema or write 15 unit tests, and at 2:15 PM you get hit with:
->
-> ## *"You've reached your usage limit until 7:00 PM."*
->
-S1 Precog is a Model Context Protocol (MCP) server exposing a `delegate_worker` tool. A System 1 routing layer classifies work, sends implementation tasks to the selected worker, extracts emitted files, verifies generated tests in-process, and promotes validated output into the workspace.
-
-The server is designed for developer workspaces. Staging, verification, and token accounting run locally, and a compact receipt returns to the MCP client. Delegated task content is sent to the selected worker endpoint.
 
 ## Keep architecture in the host model and delegate bounded implementation
 
