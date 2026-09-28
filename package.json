@@ -15,7 +15,7 @@
         "build": "tsc -p tsconfig.json && node scripts/set-cli-permissions.mjs",
         "prepack": "npm run build",
         "start": "node dist/cli.js serve",
-        "test": "npm run build && node --test tests/mcp.test.mjs"
+        "test": "npm run build && node --test tests/mcp.test.mjs tests/verifier.test.mjs"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",

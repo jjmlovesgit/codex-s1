@@ -2,11 +2,7 @@
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
-import * as vm from 'node:vm';
-import assert from 'node:assert';
-import { format } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import ts from 'typescript';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -17,12 +13,19 @@ import { TokenLedger, loadPricingConfig, type OperationalMetrics } from './core/
 import { buildWorkerMessages, HARDENED_WORKER_SYSTEM_PROMPT, WORKER_FILE_END, WORKER_FILE_START, WORKER_FEW_SHOTS, WORKER_STOP_TOKENS } from './prompts/workerPrompt.js';
 import { activeEngine, createDecisionEngine, engineRegistry, loadDecisionConfig } from './decision/factory.js';
 import type { RoutingDecision } from './decision/types.js';
+import { getActiveVerifier } from './verifiers/factory.js';
+import type { VerificationResult } from './verifiers/types.js';
 
 export { PROFILES, SavingsTracker, TokenLedger, loadPricingConfig };
 export type { OperationalMetrics, TokenUsage, PricingConfig, PricingTier } from './core/tokenLedger.js';
 export { buildWorkerMessages, HARDENED_WORKER_SYSTEM_PROMPT, WORKER_FILE_END, WORKER_FILE_START, WORKER_FEW_SHOTS, WORKER_STOP_TOKENS } from './prompts/workerPrompt.js';
 export { activeEngine, createDecisionEngine, engineRegistry, loadDecisionConfig };
 export { getExecutionProviders, createLayaSession } from './router/engine.js';
+export { getVerifierBackend, createVerifier, getActiveVerifier } from './verifiers/factory.js';
+export { buildDockerArgs, DockerVerifier, DEFAULT_DOCKER_VERIFIER_IMAGE } from './verifiers/dockerVerifier.js';
+export { InProcessVerifier, inProcessVerifier } from './verifiers/inProcessVerifier.js';
+export type { VerificationResult, VerifierOptions, VerifierStrategy } from './verifiers/types.js';
+export type { VerifierBackend } from './verifiers/factory.js';
 export type { ISystemOneEngine, RoutingDecision, RoutingState, RoutingDestination } from './decision/types.js';
 
 export const DELEGATE_WORKER_SCHEMA = {
@@ -341,112 +344,15 @@ function commitStagedFiles(files: FileEmissionResult[], staging: string, workspa
     }
   }
 }
-export interface TestResults { status: 'passed' | 'failed' | 'skipped'; passed: number; failed: number; output: string }
+export interface TestResults extends VerificationResult {}
 
-// Standalone assertion scripts only: no shell, subprocesses, or test framework globals.
-// VM provides execution controls, not a security boundary against hostile code.
 export async function runSandboxVerification(files: FileEmissionResult[], workspace: string, timeoutMs = 5_000): Promise<TestResults> {
-  const tests = files.filter(file => /\.(?:test|spec)\.(?:[cm]?js|ts)$/i.test(file.relativeName));
-  if (!tests.length) return { status: 'failed', passed: 0, failed: 1, output: 'Verification requested, but no generated .test/.spec JS or TS assertion scripts were found.' };
-  let passed = 0;
-  let failed = 0;
-  let output = '';
-  const log = (...args: unknown[]) => { output = (output + format(...args) + '\n').slice(-2000); };
-  for (const test of tests) {
-    const cache = new Map<string, { exports: unknown }>();
-    const executionTimeoutMs = Math.min(Math.max(1, timeoutMs), 5_000);
-    const timeoutHandles = new Set<ReturnType<typeof setTimeout>>();
-    const intervalHandles = new Set<ReturnType<typeof setInterval>>();
-    const asyncErrors: unknown[] = [];
-    const timerLimit = 100;
-      const safeQueueMicrotask = (callback: () => void) => queueMicrotask(() => { try { callback(); } catch (error) { asyncErrors.push(error); } });
-    const boundedDelay = (delay: unknown) => typeof delay === 'number' && Number.isFinite(delay) ? Math.max(0, Math.min(delay, executionTimeoutMs)) : 0;
-    const safeSetTimeout = (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
-      if (timeoutHandles.size + intervalHandles.size >= timerLimit) throw new Error('Verification timer limit exceeded.');
-      let handle!: ReturnType<typeof setTimeout>;
-      handle = setTimeout(() => {
-        timeoutHandles.delete(handle);
-        try { callback(...args); } catch (error) { asyncErrors.push(error); }
-      }, boundedDelay(delay));
-      timeoutHandles.add(handle);
-      return handle;
-    };
-    const safeSetInterval = (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
-      if (timeoutHandles.size + intervalHandles.size >= timerLimit) throw new Error('Verification timer limit exceeded.');
-      let handle!: ReturnType<typeof setInterval>;
-      handle = setInterval(() => {
-        try { callback(...args); } catch (error) { asyncErrors.push(error); }
-      }, boundedDelay(delay));
-      intervalHandles.add(handle);
-      return handle;
-    };
-    const safeClearTimeout = (handle: unknown) => {
-      if (handle !== undefined && handle !== null) {
-        clearTimeout(handle as ReturnType<typeof setTimeout>);
-        timeoutHandles.delete(handle as ReturnType<typeof setTimeout>);
-      }
-    };
-    const safeClearInterval = (handle: unknown) => {
-      if (handle !== undefined && handle !== null) {
-        clearInterval(handle as ReturnType<typeof setInterval>);
-        intervalHandles.delete(handle as ReturnType<typeof setInterval>);
-      }
-    };
-    const context = vm.createContext({ console: { log, error: log, warn: log, info: log, debug: log }, setTimeout: safeSetTimeout, clearTimeout: safeClearTimeout, setInterval: safeSetInterval, clearInterval: safeClearInterval, queueMicrotask: safeQueueMicrotask }, { codeGeneration: { strings: false, wasm: false } });
-    const deadline = Date.now() + executionTimeoutMs;
-    function load(filename: string): unknown {
-      filename = workspaceFile(workspace, filename);
-      const previous = cache.get(filename);
-      if (previous) return previous.exports;
-      const module = { exports: {} as unknown };
-      cache.set(filename, module);
-      const source = fs.readFileSync(filename, 'utf8');
-      if (path.extname(filename) === '.json') { module.exports = JSON.parse(source); return module.exports; }
-      const compiled = ts.transpileModule(source, { fileName: filename, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true } });
-      const localRequire = (specifier: string): unknown => {
-        if (specifier === 'node:assert' || specifier === 'assert') return assert;
-        if (specifier === 'node:assert/strict' || specifier === 'assert/strict') return assert.strict;
-        if (!specifier.startsWith('.')) throw new Error(`Unsupported verification import: ${specifier}. Use standalone node:assert scripts and relative imports.`);
-        const base = workspaceFile(workspace, path.resolve(path.dirname(filename), specifier));
-        const candidates = [base, `${base}.ts`, `${base}.js`, `${base}.cjs`, `${base}.mjs`, `${base}.json`, path.join(base, 'index.ts'), path.join(base, 'index.js')];
-        if (base.endsWith('.js')) candidates.push(base.slice(0, -3) + '.ts');
-        const found = candidates.find(candidate => { workspaceFile(workspace, candidate); return fs.existsSync(candidate) && fs.statSync(candidate).isFile(); });
-        if (!found) throw new Error(`Cannot resolve verification import: ${specifier}`);
-        return load(found);
-      };
-      // Arguments are captured before nested relative imports reuse the context slots.
-      Object.assign(context, { __module: module, __require: localRequire, __filenameArg: filename, __dirnameArg: path.dirname(filename) });
-      new vm.Script(`(function(module, exports, require, __filename, __dirname) {\n${compiled.outputText}\n})(__module, __module.exports, __require, __filenameArg, __dirnameArg)`, { filename }).runInContext(context, { timeout: Math.min(executionTimeoutMs, Math.max(1, deadline - Date.now())) });
-      return module.exports;
-    }    let timer: ReturnType<typeof setTimeout> | undefined;
-    const unhandledRejection = (reason: unknown) => { asyncErrors.push(reason); };
-    process.on('unhandledRejection', unhandledRejection);
-    try {
-      const exported = load(test.path) as { default?: unknown } | undefined;
-      context.__result = exported && typeof exported === 'object' && 'default' in exported ? exported.default : exported && typeof exported === 'object' && 'run' in exported ? (exported as { run: unknown }).run : exported;
-      const result: unknown = new vm.Script('typeof __result === "function" ? __result() : __result').runInContext(context, { timeout: Math.min(executionTimeoutMs, Math.max(1, deadline - Date.now())) });
-      const settled = await Promise.race([Promise.resolve(result), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Verification timed out.')), Math.min(executionTimeoutMs, Math.max(1, deadline - Date.now()))); })]);
-      await new Promise<void>(resolve => setImmediate(resolve));
-      if (asyncErrors.length) throw new Error('Verification async failure: ' + errorMessage(asyncErrors[0]));
-      if (settled && typeof settled === 'object' && 'passed' in settled && (settled as { passed?: unknown }).passed === false) {
-        const details = 'errors' in settled && Array.isArray((settled as { errors?: unknown }).errors) ? (settled as { errors: unknown[] }).errors.join('; ') : 'run() reported failure';
-        throw new Error('Verification reported failure: ' + details);
-      }
-      passed++;
-      log(`PASS ${test.relativeName}`);
-    } catch (error) {
-      failed++;
-      log(`FAIL ${test.relativeName}: ${errorMessage(error)}`);
-    } finally {
-      process.off('unhandledRejection', unhandledRejection);
-      if (timer) clearTimeout(timer);
-      for (const handle of timeoutHandles) safeClearTimeout(handle);
-      for (const handle of intervalHandles) safeClearInterval(handle);
-    }
-  }
-  return { status: failed ? 'failed' : 'passed', passed, failed, output };
+  const tests = files
+    .filter(file => /\.(?:test|spec)\.(?:[cm]?js|ts)$/i.test(file.relativeName))
+    .map(file => file.relativeName);
+  const fallbackToVm = /^(?:1|true|yes)$/i.test(process.env.DOCKER_VERIFIER_FALLBACK_VM ?? '');
+  return getActiveVerifier().run(workspace, tests, { timeoutMs, fallbackToVm });
 }
-
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 export function estimateTokenCount(text: string): number { return Math.ceil(text.length / 3.8); }
 function tokenCount(value: unknown, fallback: number): number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : fallback; }
@@ -544,8 +450,8 @@ export async function delegateWorker(input: DelegateWorkerParams) {
       const testResults: TestResults = shouldVerify && filesWritten.length > 0
         ? await runSandboxVerification(filesWritten, stagingDir!)
         : filesWritten.length === 0
-          ? { status: 'failed', passed: 0, failed: 1, output: parseError || 'No files were found in worker output.' }
-          : { status: 'skipped', passed: 0, failed: 0, output: 'Verification not requested.' };
+          ? { status: 'failed', passed: 0, failed: 1, output: parseError || 'No files were found in worker output.', durationMs: 0 }
+          : { status: 'skipped', passed: 0, failed: 0, output: 'Verification not requested.', durationMs: 0 };
       let failed = Boolean(parseError) || filesWritten.length === 0 || missingFiles.length > 0 || testResults.status === 'failed';
       if (!failed) {
         try {

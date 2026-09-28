@@ -235,6 +235,9 @@ Create or update `.cursor/mcp.json` in the workspace:
 | `LOCAL_MODEL_NAME` | `qwen2.5-coder-32b-instruct` | Local model identifier sent to the worker endpoint. |
 | `S1_PRECOG_HOME` | User home directory | Optional base directory for `.s1-precog/ledger.json`. |
 | `BENCHMARK_MODEL` | `gpt-5.6-luna` | Benchmark tier used when presenting avoided cloud cost. |
+| `VERIFIER_BACKEND` | `vm` | Verification backend: `vm` (default) or `docker`. |
+| `DOCKER_VERIFIER_IMAGE` | `s1-precog-verifier:latest` | Docker image used by the isolated verifier. |
+| `DOCKER_VERIFIER_FALLBACK_VM` | `false` | When true, fall back to the in-process VM if Docker is unavailable. |
 
 Pricing tiers are stored in `.codex/pricing.json`. The active benchmark can be changed there without recompiling the server.
 

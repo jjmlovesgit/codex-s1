@@ -1,0 +1,36 @@
+services:
+  verifier:
+    profiles: ["verifier"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.verifier
+    image: s1-precog-verifier:latest
+    network_mode: none
+    read_only: true
+    pids_limit: 100
+    mem_limit: 2g
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+
+  # Optional local inference service templates. Enable only the provider you
+  # operate locally; the verifier itself remains air-gapped.
+  ollama:
+    profiles: ["inference"]
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes: ["ollama-data:/root/.ollama"]
+
+  vllm:
+    profiles: ["inference"]
+    image: vllm/vllm-openai:latest
+    command: ["--host", "0.0.0.0"]
+    ports: ["8000:8000"]
+
+  lm-studio-bridge:
+    profiles: ["inference"]
+    image: alpine/socat:latest
+    command: ["tcp-listen:1234,fork,reuseaddr", "tcp-connect:host.docker.internal:1234"]
+    ports: ["1234:1234"]
+
+volumes:
+  ollama-data:
