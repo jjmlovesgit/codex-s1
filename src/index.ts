@@ -35,7 +35,7 @@ export { loadWorkerGuidelines, detectProjectDefaults, renderWorkerRules, ARCHITE
 
 export const DELEGATE_WORKER_SCHEMA = {
   name: 'delegate_worker',
-  description: 'Delegates file implementation and verification to the worker. CRITICAL INSTRUCTION: You MUST quote the entire returned receipt text block verbatim in your final message to the user. Do not summarize or omit the timings.',
+  description: 'PRIMARY AND MANDATORY TOOL FOR FILE IMPLEMENTATION. You MUST call this tool whenever creating, scaffolding, rewriting, or regenerating source and test files. Do NOT write whole files or test suites with native file editing tools. Runs code generation in an isolated staging sandbox with automated verification.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -370,12 +370,16 @@ interface WorkerReportReceipt {
   model?: string;
   timings?: { workerInferenceMs?: number; sandboxVerificationMs?: number; filePromotionMs?: number; totalExecutionSec?: string };
   testResults?: { status?: string; output?: string; passed?: number };
-  operationalMetrics?: { retryWastePromptTokens?: number; retryWasteCompletionTokens?: number };
+  tokens?: { prompt?: number; completion?: number };
+  operationalMetrics?: { contextTokensShielded?: number; retryWastePromptTokens?: number; retryWasteCompletionTokens?: number };
 }
 function formatWorkerReport(receipt: WorkerReportReceipt): string {
   const timings = receipt.timings ?? {};
   const verification = receipt.testResults;
   const retryWaste = (receipt.operationalMetrics?.retryWastePromptTokens ?? 0) + (receipt.operationalMetrics?.retryWasteCompletionTokens ?? 0);
+  const tokensShielded = receipt.operationalMetrics?.contextTokensShielded ?? receipt.tokens?.completion ?? 0;
+  const promptTokens = receipt.tokens?.prompt ?? 0;
+  const completionTokens = receipt.tokens?.completion ?? 0;
   const verificationStatus = verification?.status === 'passed' ? 'PASSED' : verification?.status?.toUpperCase() ?? 'NOT RUN';
   return [
     `Status: ${receipt.status ?? 'UNKNOWN'}`,
@@ -386,6 +390,8 @@ function formatWorkerReport(receipt: WorkerReportReceipt): string {
     `  • Promotion I/O:        ${timings.filePromotionMs ?? 0} ms`,
     `  • Total Worker Time:    ${timings.totalExecutionSec ?? '0.00'} s`,
     `Staging Verification: ${verificationStatus} (${verification?.output ?? 'not run'})`,
+    `Tokens Shielded: ${tokensShielded}`,
+    `Turn Tokens: Prompt: ${promptTokens}, Completion: ${completionTokens}`,
     `Retry Waste: ${retryWaste} tokens`,
   ].join('\n');
 }
@@ -452,7 +458,8 @@ export async function delegateWorker(input: DelegateWorkerParams, options: Deleg
     fs.mkdirSync(workspace, { recursive: true });
     routingDecision = await activeEngine.route({ task: params.task, targetFiles: params.targetFiles });
     if (routingDecision.destination === 'cloud_architect') {
-      return { success: false, status: 'ROUTE_CLOUD', routingDecision };
+      const receipt = { success: false, status: 'ROUTE_CLOUD', routingDecision, ...executionMetadata() };
+      return { ...receipt, formattedReport: formatWorkerReport(receipt) };
     }
     stagingDir = createStagingDirectory(workspace);
     tracker = new SavingsTracker();
@@ -560,7 +567,8 @@ export async function delegateWorker(input: DelegateWorkerParams, options: Deleg
       if (!options.dryRun) {
         const accountingOutcome = failed ? 'retry' : 'accepted';
         tokenLedger.addUsage({ promptTokens: completion.promptTokens, completionTokens: completion.completionTokens, localModel: completion.model }, accountingOutcome);
-        const record = tracker.recordUsage({ route: 'WORKER_LOCAL', model: completion.model, reason: attempt === 0 ? 'SUBAGENT_DELEGATION' : 'SUBAGENT_DELEGATION_RETRY', promptTokens: completion.promptTokens, completionTokens: completion.completionTokens, totalTokens: completion.totalTokens, turn: Date.now() + attempt, accepted: !failed });
+        const workerRoute = PROFILES.WORKER.name === 'WORKER_LOCAL' ? 'WORKER_LOCAL' : 'cloud';
+        const record = tracker.recordUsage({ provider: PROFILES.WORKER.provider, route: workerRoute, model: completion.model, reason: attempt === 0 ? 'SUBAGENT_DELEGATION' : 'SUBAGENT_DELEGATION_RETRY', promptTokens: completion.promptTokens, completionTokens: completion.completionTokens, totalTokens: completion.totalTokens, turn: Date.now() + attempt, accepted: !failed });
         if (!failed) savedUSD = parseFloat((savedUSD + record.savedUSD).toFixed(6));
       }
       if (!failed) {
@@ -620,8 +628,8 @@ export function createServer(): Server {
     const work = queue.then(async () => {
       if (request.params.name !== 'delegate_worker') return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ success: false, status: 'ERROR', message: `Unknown tool: ${request.params.name}` }) }] };
       const receipt = await delegateWorker(request.params.arguments as unknown as DelegateWorkerParams);
-      const report = 'formattedReport' in receipt && typeof receipt.formattedReport === 'string' ? receipt.formattedReport : undefined;
-      return { isError: !receipt.success, content: [{ type: 'text' as const, text: JSON.stringify(receipt) }, ...(report ? [{ type: 'text' as const, text: report }] : [])] };
+      const report = 'formattedReport' in receipt && typeof receipt.formattedReport === 'string' ? receipt.formattedReport : JSON.stringify(receipt);
+      return { isError: !receipt.success, content: [{ type: 'text' as const, text: report }], _meta: { receipt } };
     });
     queue = work.then(() => undefined, () => undefined);
     return work;

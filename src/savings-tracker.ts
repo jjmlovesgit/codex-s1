@@ -15,6 +15,7 @@ export type RouteType = 'ARCHITECT_CLOUD' | 'WORKER_LOCAL' | 'local' | 'cloud' |
 export interface StepUsage {
   turn?: number
   route: RouteType
+  provider?: string
   model?: string
   reason?: string
   promptTokens: number
@@ -152,7 +153,7 @@ export class SavingsTracker {
       turn,
       timestamp: new Date().toISOString(),
       route,
-      provider: isLocal ? 'lm-studio' : 'deepseek-official',
+      provider: usage.provider ?? (isLocal ? 'lm-studio' : 'deepseek-official'),
       model,
       routingReason: reason,
       promptTokensEst: promptTokens,
