@@ -1,5 +1,57 @@
 # s1-precog
 
+## Quickstart (Zero-Config Onboarding)
+
+Your MCP client configuration needs no API keys or environment variables. S1 Precog selects a saved or detected provider, then falls back to local LM Studio.
+
+### 1. Configure in Codex (GUI)
+
+In Codex, open **Settings → MCP servers → Add server**, choose **STDIO**, and enter these values ([official OpenAI Docs](https://developers.openai.com/codex/mcp)):
+
+| Field | Value | Notes |
+| :--- | :--- | :--- |
+| **Name** | `s1-precog` | Identifies the server in Codex. |
+| **Command to launch** | `npx` | Runs the package from npm. |
+| **Arguments** | `-y`<br>`s1-precog`<br>`serve` | Add each as a separate argument. |
+| **Environment variables** | *(Leave blank)* | Provider setup happens outside MCP client settings. |
+| **Environment variable passthrough** | *(Leave blank)* | Add key names only if you rely on keys from the host process environment. |
+| **Working directory** | *(Leave blank)* | Optional. Set your workspace path if the MCP host does not start the server there. |
+
+Save the server and restart Codex. For Claude Desktop, the equivalent `claude_desktop_config.json` entry is:
+
+```json
+{
+  "mcpServers": {
+    "s1-precog": {
+      "command": "npx",
+      "args": ["-y", "s1-precog", "serve"]
+    }
+  }
+}
+```
+
+### 2. Set up your provider
+
+Run the interactive wizard in a terminal:
+
+```bash
+npx -y s1-precog config
+```
+
+The wizard offers an auto-detected provider, local LM Studio, or a custom OpenAI-compatible endpoint. Supported provider presets include DeepSeek, OpenAI, Groq, and OpenRouter. Saved choices live in `~/.precog/config.json`; auto-detected keys remain in your environment, while a key entered for a custom provider is saved in that file.
+
+**Running locally?** If LM Studio is serving a model at `http://127.0.0.1:1234/v1`, you can skip `config`: S1 Precog uses it when no other provider is configured, with no provider API charge. Ollama can be used through a configured OpenAI-compatible endpoint.
+
+### 3. Initialize your project (optional)
+
+In your repository root, run:
+
+```bash
+npx -y s1-precog init
+```
+
+`init` detects TypeScript or JavaScript, ESM or CommonJS, and Next.js projects. It creates `.precog/worker.md` with worker rules and `AGENTS.md` with guidance for delegating implementation tasks. Existing custom files are preserved.
+
 [![npm version](https://img.shields.io/npm/v/s1-precog.svg?style=flat-square&color=blue)](https://www.npmjs.com/package/s1-precog)
 [![npm monthly downloads](https://img.shields.io/npm/dm/s1-precog.svg?style=flat-square&color=green)](https://www.npmjs.com/package/s1-precog)
 [![Node.js](https://img.shields.io/node/v/s1-precog.svg?style=flat-square&color=339933)](https://nodejs.org/)
@@ -122,31 +174,6 @@ flowchart TD
 - **Honest quota accounting:** Accepted shielded tokens and local retry waste are tracked separately. Savings are calculated from accepted output only, while retry attempts remain visible as local compute overhead.
 - **Strict file ingress:** Delegations declare a non-empty `targetFiles` allowlist. Paths are normalized across Windows and POSIX separators, and emitted files are rejected when they are undeclared or escape the workspace.
 - **Provider waterfall:** Process overrides, saved user configuration, detected provider keys, then a local LM Studio fallback select the worker without requiring credentials in MCP host settings.
-
-## Quickstart
-
-Add this entry to your MCP host configuration, such as Claude Desktop's `claude_desktop_config.json` or Cursor's `.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "s1-precog": {
-      "command": "npx",
-      "args": ["-y", "s1-precog", "serve"]
-    }
-  }
-}
-```
-
-**No API keys or environment variables are needed in the MCP client settings.** S1 Precog resolves its worker provider internally from process overrides, a saved user configuration, detected provider keys, or local LM Studio. Cloud providers still require a key through your normal environment or `s1-precog config`; the local fallback requires no credential.
-
-In your workspace, run initialization once to create project rules:
-
-```powershell
-npx -y s1-precog init
-```
-
-For a global installation, run `npm install -g s1-precog` and use `s1-precog` in place of `npx -y s1-precog`.
 
 ## Worker provider resolution
 
