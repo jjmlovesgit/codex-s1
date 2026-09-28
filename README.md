@@ -33,7 +33,7 @@ In Codex, open **Settings → MCP servers → Add server**, choose **STDIO**, an
 | **Arguments** | `-y`<br>`s1-precog`<br>`serve` | Add each as a separate argument. |
 | **Environment variables** | *(Leave blank)* | Provider setup happens outside MCP client settings. |
 | **Environment variable passthrough** | *(Leave blank)* | Add key names only if you rely on keys from the host process environment. |
-| **Working directory** | *(Leave blank)* | Optional. Set your workspace path if the MCP host does not start the server there. |
+| **Working directory** | *(Leave blank)* | Optional. Set it to the repository path when the MCP host does not start the server there. See the workspace note below. |
 
 Save the server and restart Codex. For Claude Desktop, the equivalent `claude_desktop_config.json` entry is:
 
@@ -60,7 +60,7 @@ The wizard offers an auto-detected provider, local LM Studio, or a custom OpenAI
 
 **Running locally?** If LM Studio is serving a model at `http://127.0.0.1:1234/v1`, you can skip `config`: S1 Precog uses it when no other provider is configured, with no provider API charge. Ollama can be used through a configured OpenAI-compatible endpoint.
 
-### 3. Initialize your project (optional)
+### 3. Initialize each project (recommended)
 
 In your repository root, run:
 
@@ -69,6 +69,10 @@ npx -y s1-precog init
 ```
 
 `init` detects TypeScript or JavaScript, ESM or CommonJS, and Next.js projects. It creates `.precog/worker.md` with worker rules and `AGENTS.md` with guidance for delegating implementation tasks. Existing custom files are preserved.
+
+**Switching repositories does not break the `npx` installation or MCP server configuration.** Run `npx -y s1-precog init` from the root of each repository where you want project-specific rules. Without an `AGENTS.md` in that project (or applicable global Codex guidance), Codex has no persistent instruction to delegate automatically; you can still ask it to call `delegate_worker` explicitly. Codex discovers project `AGENTS.md` files from the project root through the chat's working directory when a run starts, so start a new chat or session for a different project ([Codex AGENTS.md documentation](https://learn.chatgpt.com/docs/agent-configuration/agents-md)).
+
+The MCP server's process working directory is separate from Codex's active workspace. If `delegate_worker` is called without `workspacePath`, S1 Precog uses the server process's working directory. When switching projects, pass the new repository's absolute path as `workspacePath`, or start the server with that repository as its working directory. A `~/.precog/worker.md` file supplies global **worker** rules; it does not replace Codex's `AGENTS.md` delegation guidance.
 
 ## Keep architecture in the host model and delegate bounded implementation
 
