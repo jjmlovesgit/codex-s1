@@ -1,4 +1,34 @@
 services:
+  server:
+    profiles: ["server"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    image: s1-precog:0.1.8
+    working_dir: /workspace
+    stdin_open: true
+    tty: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      WORKER_BASE_URL: ${WORKER_BASE_URL:-}
+      WORKER_MODEL: ${WORKER_MODEL:-}
+      WORKER_API_KEY: ${WORKER_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+      - type: bind
+        source: "${PRECOG_CONFIG_DIR:-./.precog-docker}"
+        target: /root/.precog
+      - type: bind
+        source: "${PRECOG_LEDGER_DIR:-./.s1-precog-docker}"
+        target: /root/.s1-precog
+
   verifier:
     profiles: ["verifier"]
     build:

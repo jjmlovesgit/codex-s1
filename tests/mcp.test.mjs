@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { delegateWorker, extractAndEmitFiles, parseFileBlocks, runSandboxVerification, SavingsTracker, createServer } from '../dist/index.js';
+import { delegateWorker, extractAndEmitFiles, parseFileBlocks, runSandboxVerification, SavingsTracker, createServer, PROFILES } from '../dist/index.js';
 import { ledgerPath } from '../dist/ledger-path.js';
 
 test('package exposes the production binary and legacy alias', () => {
@@ -51,7 +51,7 @@ function workspace(t) {
 }
 function completion(t, content, extra = {}) {
   t.mock.method(globalThis, 'fetch', async (url, options) => {
-    assert.equal(url, 'http://127.0.0.1:1234/v1/chat/completions');
+    assert.equal(url, `${PROFILES.WORKER.endpoint}/chat/completions`);
     const body = JSON.parse(options.body);
     assert.equal(body.enable_thinking, false);
     assert.equal(body.reasoning_effort, 'none');
@@ -78,6 +78,14 @@ test('delegation emits nested TS files, verifies async assertions, and persists 
   assert.equal(receipt.operationalMetrics.estimatedCloudMessagesSaved, 1.33);
   assert.equal(receipt.operationalMetrics.savedUSD, 0.045);
   assert.equal(receipt.operationalMetrics.estimatedBytesAvoided, fs.readFileSync(path.join(dir, 'src/math.ts')).length + fs.readFileSync(path.join(dir, 'tests/math.test.ts')).length);
+  assert.ok(['WORKER_LOCAL', 'WORKER_CLOUD'].includes(receipt.worker));
+  assert.equal(receipt.model, process.env.WORKER_MODEL || process.env.LM_STUDIO_MODEL || PROFILES.WORKER.model);
+  assert.equal(receipt.endpoint, PROFILES.WORKER.endpoint);
+  assert.ok(receipt.timings.workerInferenceMs >= 0);
+  assert.ok(receipt.timings.sandboxVerificationMs >= 0);
+  assert.ok(receipt.timings.filePromotionMs >= 0);
+  assert.match(receipt.timings.totalExecutionSec, /^\d+\.\d{2}$/);
+  assert.ok(receipt.verification.passed >= 1);
   assert.equal(fs.existsSync(path.join(dir, '.precog-stage')), true);
   assert.equal(fs.existsSync(path.join(dir, '.codex-stage')), false);
   await delegateWorker(params);
@@ -181,7 +189,7 @@ assert.equal(1, 1);
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     calls++;
     const body = JSON.parse(options.body);
-    assert.equal(url, 'http://127.0.0.1:1234/v1/chat/completions');
+    assert.equal(url, `${PROFILES.WORKER.endpoint}/chat/completions`);
     assert.equal(body.max_tokens, 8192);
     if (calls === 2) assert.match(body.messages.at(-1).content, /previous output failed verification/);
     const content = calls === 1 ? first : second;
@@ -222,6 +230,23 @@ test('invalid arguments, HTTP errors, and unavailable usage produce accurate rec
   assert.ok(receipt.tokens.prompt > 0);
 });
 
+test('local worker connection refusal returns actionable setup guidance', async t => {
+  if (process.env.WORKER_API_KEY || process.env.DEEPSEEK_API_KEY) return;
+  const dir = workspace(t);
+  const stub = t.mock.method(globalThis, 'fetch', async () => {
+    const error = new TypeError('fetch failed');
+    error.cause = { code: 'ECONNREFUSED' };
+    throw error;
+  });
+  const receipt = await delegateWorker({ task: 'generate', targetFiles: ['a.js'], workspacePath: dir });
+  assert.equal(receipt.success, false);
+  assert.equal(receipt.status, 'NO_WORKER_AVAILABLE');
+  assert.equal(receipt.error, 'NO_WORKER_AVAILABLE');
+  assert.match(receipt.message, /Start LM Studio/);
+  assert.match(receipt.message, /WORKER_API_KEY/);
+  assert.equal(stub.mock.callCount(), 1);
+});
+
 test('ledger keeps the reference cloud math, honors custom rates, and preserves corrupt data', t => {
   const dir = workspace(t);
   const tracker = new SavingsTracker(dir);
@@ -250,6 +275,9 @@ test('MCP client receives tool schema, compact successful receipt and error rece
   const result = await client.callTool({ name: 'delegate_worker', arguments: { task: 'generate', targetFiles: ['src/math.ts', 'tests/math.test.ts'], workspacePath: dir, runVerification: true } });
   assert.equal(result.isError, false);
   assert.equal(JSON.parse(result.content[0].text).status, 'SUCCESS');
+  assert.match(result.content[1].text, /Status: SUCCESS/);
+  assert.match(result.content[1].text, /Inference \/ Thinking:/);
+  assert.match(result.content[1].text, /Staging Verification: PASSED/);
   const invalid = await client.callTool({ name: 'delegate_worker', arguments: { task: 42 } });
   assert.equal(invalid.isError, true);
 });

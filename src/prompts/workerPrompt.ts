@@ -126,9 +126,9 @@ ${WORKER_DELEGATION_END}`,
 
 export const WORKER_FEW_SHOTS = WORKER_FEW_SHOT_MESSAGES;
 
-export function buildWorkerMessages(userPrompt: string) {
+export function buildWorkerMessages(userPrompt: string, guidelines = '') {
   return [
-    { role: 'system' as const, content: HARDENED_WORKER_SYSTEM_PROMPT },
+    { role: 'system' as const, content: HARDENED_WORKER_SYSTEM_PROMPT + (guidelines ? `\n\n## Project Specific Guidelines\n${guidelines}` : '') },
     ...WORKER_FEW_SHOTS,
     { role: 'user' as const, content: userPrompt },
   ];

@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { performance } from 'node:perf_hooks';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -15,8 +16,11 @@ import { activeEngine, createDecisionEngine, engineRegistry, loadDecisionConfig 
 import type { RoutingDecision } from './decision/types.js';
 import { getActiveVerifier } from './verifiers/factory.js';
 import type { VerificationResult } from './verifiers/types.js';
+import { loadWorkerGuidelines } from './worker-guidelines.js';
 
 export { PROFILES, SavingsTracker, TokenLedger, loadPricingConfig };
+export { WORKER_PROFILE, PROVIDER_PRESETS, resolveWorkerProfile } from './profiles.js';
+export { loadConfig, saveConfig, clearConfig, configPath } from './config.js';
 export type { OperationalMetrics, TokenUsage, PricingConfig, PricingTier } from './core/tokenLedger.js';
 export { buildWorkerMessages, HARDENED_WORKER_SYSTEM_PROMPT, WORKER_FILE_END, WORKER_FILE_START, WORKER_FEW_SHOTS, WORKER_STOP_TOKENS } from './prompts/workerPrompt.js';
 export { activeEngine, createDecisionEngine, engineRegistry, loadDecisionConfig };
@@ -27,10 +31,11 @@ export { InProcessVerifier, inProcessVerifier } from './verifiers/inProcessVerif
 export type { VerificationResult, VerifierOptions, VerifierStrategy } from './verifiers/types.js';
 export type { VerifierBackend } from './verifiers/factory.js';
 export type { ISystemOneEngine, RoutingDecision, RoutingState, RoutingDestination } from './decision/types.js';
+export { loadWorkerGuidelines, detectProjectDefaults, renderWorkerRules, ARCHITECT_RULES_TEMPLATE } from './worker-guidelines.js';
 
 export const DELEGATE_WORKER_SCHEMA = {
   name: 'delegate_worker',
-  description: 'PRIMARY CODE GENERATION & EXECUTION ENGINE. MANDATORY: Whenever any code implementation, file creation, refactoring, or test suite needs to be generated and written to disk, you MUST invoke this tool with the task contract rather than outputting source code directly. This offloads implementation and in-process validation to the local runtime.',
+  description: 'Delegates file implementation and verification to the worker. CRITICAL INSTRUCTION: You MUST quote the entire returned receipt text block verbatim in your final message to the user. Do not summarize or omit the timings.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -354,10 +359,76 @@ export async function runSandboxVerification(files: FileEmissionResult[], worksp
   return getActiveVerifier().run(workspace, tests, { timeoutMs, fallbackToVm });
 }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+function isConnectionRefused(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return /ECONNREFUSED/i.test(String(error));
+  const value = error as { code?: unknown; message?: unknown; cause?: { code?: unknown; message?: unknown } };
+  return value.code === 'ECONNREFUSED' || value.cause?.code === 'ECONNREFUSED' || /ECONNREFUSED/i.test(String(value.message ?? value.cause?.message ?? error));
+}
+interface WorkerReportReceipt {
+  status?: string;
+  worker?: string;
+  model?: string;
+  timings?: { workerInferenceMs?: number; sandboxVerificationMs?: number; filePromotionMs?: number; totalExecutionSec?: string };
+  testResults?: { status?: string; output?: string; passed?: number };
+  operationalMetrics?: { retryWastePromptTokens?: number; retryWasteCompletionTokens?: number };
+}
+function formatWorkerReport(receipt: WorkerReportReceipt): string {
+  const timings = receipt.timings ?? {};
+  const verification = receipt.testResults;
+  const retryWaste = (receipt.operationalMetrics?.retryWastePromptTokens ?? 0) + (receipt.operationalMetrics?.retryWasteCompletionTokens ?? 0);
+  const verificationStatus = verification?.status === 'passed' ? 'PASSED' : verification?.status?.toUpperCase() ?? 'NOT RUN';
+  return [
+    `Status: ${receipt.status ?? 'UNKNOWN'}`,
+    `Worker: ${receipt.worker ?? 'unknown'} (${receipt.model ?? 'unknown'})`,
+    'Timings:',
+    `  • Inference / Thinking: ${timings.workerInferenceMs ?? 0} ms`,
+    `  • Staging Test:         ${timings.sandboxVerificationMs ?? 0} ms`,
+    `  • Promotion I/O:        ${timings.filePromotionMs ?? 0} ms`,
+    `  • Total Worker Time:    ${timings.totalExecutionSec ?? '0.00'} s`,
+    `Staging Verification: ${verificationStatus} (${verification?.output ?? 'not run'})`,
+    `Retry Waste: ${retryWaste} tokens`,
+  ].join('\n');
+}
 export function estimateTokenCount(text: string): number { return Math.ceil(text.length / 3.8); }
 function tokenCount(value: unknown, fallback: number): number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : fallback; }
 
-export async function delegateWorker(input: DelegateWorkerParams) {
+export interface DelegateWorkerOptions { dryRun?: boolean; verbose?: boolean }
+
+function stagedDiff(files: FileEmissionResult[], workspace: string): string {
+  return files.map(file => {
+    const destination = workspaceFile(workspace, file.relativeName);
+    const before = fs.existsSync(destination) ? fs.readFileSync(destination, 'utf8') : '';
+    const after = fs.readFileSync(file.path, 'utf8');
+    if (before === after) return `--- a/${file.relativeName}\n+++ b/${file.relativeName}\n(no changes)`;
+    const lines = (value: string) => value.replace(/\n$/, '').split('\n');
+    return [`--- a/${file.relativeName}`, `+++ b/${file.relativeName}`,
+      ...(before ? lines(before).map(line => `-${line}`) : []),
+      ...(after ? lines(after).map(line => `+${line}`) : [])].join('\n');
+  }).join('\n\n');
+}
+
+export async function delegateWorker(input: DelegateWorkerParams, options: DelegateWorkerOptions = {}) {
+  const tStart = performance.now();
+  let workerInferenceMs = 0;
+  let sandboxVerificationMs = 0;
+  let filePromotionMs = 0;
+  let workerModel = process.env.WORKER_MODEL || process.env.LM_STUDIO_MODEL || PROFILES.WORKER.model;
+  const executionMetadata = () => {
+    const totalToolMs = Math.round(performance.now() - tStart);
+    return {
+      worker: PROFILES.WORKER.name,
+      model: workerModel,
+      endpoint: PROFILES.WORKER.endpoint,
+      source: PROFILES.WORKER.source,
+      timings: {
+        workerInferenceMs,
+        sandboxVerificationMs,
+        filePromotionMs,
+        totalExecutionSec: (totalToolMs / 1000).toFixed(2),
+        totalExecutionMs: totalToolMs,
+      },
+    };
+  };
   let filesWritten: FileEmissionResult[] = [];
   const tokens = { prompt: 0, completion: 0, total: 0, estimated: false };
   let savedUSD = 0;
@@ -369,10 +440,12 @@ export async function delegateWorker(input: DelegateWorkerParams) {
   let tokenLedger: TokenLedger | undefined;
   let finalizeMetrics: ((fileContents?: string[]) => OperationalMetrics) | undefined;
   let rawOutput = '';
+  let promptPayload: ReturnType<typeof buildWorkerMessages> | undefined;
   let stagingDir: string | undefined;
   try {
     const params = validateParams(input);
     const workspace = path.resolve(params.workspacePath ?? process.cwd());
+    const guidelines = loadWorkerGuidelines(workspace);
     params.targetFiles = normalizeTargetFiles(params.targetFiles ?? []);
     if (params.targetFiles.length === 0) throw new Error('targetFiles must contain at least one workspace-relative path.');
     ledgerPath = resolveLedgerPath();
@@ -398,12 +471,16 @@ export async function delegateWorker(input: DelegateWorkerParams) {
     const separator = String.fromCharCode(10);
     const workerUserPrompt = [userPrompt, params.testSpec ? 'Verification requirements:' + separator + params.testSpec : '', shouldVerify ? 'Include generated assertion scripts for in-process verification.' : ''].filter(Boolean).join(separator + separator);
     const requestCompletion = async (prompt: string) => {
-      const messages = buildWorkerMessages(prompt);
+      const messages = buildWorkerMessages(prompt, guidelines);
+      if (options.verbose) promptPayload = messages;
       const response = await fetch(PROFILES.WORKER.endpoint + '/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(PROFILES.WORKER.apiKey ? { Authorization: `Bearer ${PROFILES.WORKER.apiKey}` } : {}),
+        },
         body: JSON.stringify({
-          model: process.env.LM_STUDIO_MODEL || PROFILES.WORKER.model,
+          model: process.env.WORKER_MODEL || process.env.LM_STUDIO_MODEL || PROFILES.WORKER.model,
           messages,
           temperature: 0.2,
           enable_thinking: false,
@@ -425,7 +502,14 @@ export async function delegateWorker(input: DelegateWorkerParams) {
     let retryFeedback = '';
     for (let attempt = 0; attempt < 2; attempt++) {
       const prompt = retryFeedback ? workerUserPrompt + separator + separator + retryFeedback : workerUserPrompt;
-      const completion = await requestCompletion(prompt);
+      const tInferStart = performance.now();
+      let completion: Awaited<ReturnType<typeof requestCompletion>>;
+      try {
+        completion = await requestCompletion(prompt);
+      } finally {
+        workerInferenceMs += Math.round(performance.now() - tInferStart);
+      }
+      workerModel = completion.model;
       rawOutput = completion.content;
       tokens.prompt += completion.promptTokens;
       tokens.completion += completion.completionTokens;
@@ -433,41 +517,55 @@ export async function delegateWorker(input: DelegateWorkerParams) {
       tokens.estimated = tokens.estimated || completion.estimated;
       filesWritten = [];
       let parseError = '';
-      if (completion.finishReason === 'length') {
-        parseError = 'Worker output was truncated at the token limit.';
-      } else {
-        try {
-          filesWritten = extractAndEmitFiles(completion.content, params.targetFiles, stagingDir!).filesWritten;
-          preflightCommit(filesWritten, workspace);
+      const tStageStart = performance.now();
+      let missingFiles: string[] = [];
+      let testResults: TestResults;
+      try {
+        if (completion.finishReason === 'length') {
+          parseError = 'Worker output was truncated at the token limit.';
+        } else {
+          try {
+            filesWritten = extractAndEmitFiles(completion.content, params.targetFiles, stagingDir!).filesWritten;
+            preflightCommit(filesWritten, workspace);
+          }
+          catch (error) {
+            filesWritten = error instanceof FileEmissionError ? error.filesWritten : [];
+            parseError = errorMessage(error);
+          }
         }
-        catch (error) {
-          filesWritten = error instanceof FileEmissionError ? error.filesWritten : [];
-          parseError = errorMessage(error);
-        }
+        const writtenNames = new Set(filesWritten.map(file => canonicalPathKey(file.relativeName)));
+        missingFiles = (params.targetFiles ?? []).filter(file => !writtenNames.has(canonicalPathKey(file)));
+        testResults = shouldVerify && filesWritten.length > 0
+          ? await runSandboxVerification(filesWritten, stagingDir!)
+          : filesWritten.length === 0
+            ? { status: 'failed', passed: 0, failed: 1, output: parseError || 'No files were found in worker output.', durationMs: 0 }
+            : { status: 'skipped', passed: 0, failed: 0, output: 'Verification not requested.', durationMs: 0 };
+      } finally {
+        sandboxVerificationMs += Math.round(performance.now() - tStageStart);
       }
-      const writtenNames = new Set(filesWritten.map(file => canonicalPathKey(file.relativeName)));
-      const missingFiles = (params.targetFiles ?? []).filter(file => !writtenNames.has(canonicalPathKey(file)));
-      const testResults: TestResults = shouldVerify && filesWritten.length > 0
-        ? await runSandboxVerification(filesWritten, stagingDir!)
-        : filesWritten.length === 0
-          ? { status: 'failed', passed: 0, failed: 1, output: parseError || 'No files were found in worker output.', durationMs: 0 }
-          : { status: 'skipped', passed: 0, failed: 0, output: 'Verification not requested.', durationMs: 0 };
       let failed = Boolean(parseError) || filesWritten.length === 0 || missingFiles.length > 0 || testResults.status === 'failed';
-      if (!failed) {
+      const diff = !failed && options.dryRun ? stagedDiff(filesWritten, workspace) : undefined;
+      if (!failed && !options.dryRun) {
+        const tPromoteStart = performance.now();
         try {
           filesWritten = commitStagedFiles(filesWritten, stagingDir!, workspace);
         } catch (error) {
           filesWritten = error instanceof FileEmissionError ? error.filesWritten : [];
           parseError = errorMessage(error);
           failed = true;
+        } finally {
+          filePromotionMs += Math.round(performance.now() - tPromoteStart);
         }
       }
-      const accountingOutcome = failed ? 'retry' : 'accepted';
-      tokenLedger.addUsage({ promptTokens: completion.promptTokens, completionTokens: completion.completionTokens, localModel: completion.model }, accountingOutcome);
-      const record = tracker.recordUsage({ route: 'WORKER_LOCAL', model: completion.model, reason: attempt === 0 ? 'SUBAGENT_DELEGATION' : 'SUBAGENT_DELEGATION_RETRY', promptTokens: completion.promptTokens, completionTokens: completion.completionTokens, totalTokens: completion.totalTokens, turn: Date.now() + attempt, accepted: !failed });
-      if (!failed) savedUSD = parseFloat((savedUSD + record.savedUSD).toFixed(6));
+      if (!options.dryRun) {
+        const accountingOutcome = failed ? 'retry' : 'accepted';
+        tokenLedger.addUsage({ promptTokens: completion.promptTokens, completionTokens: completion.completionTokens, localModel: completion.model }, accountingOutcome);
+        const record = tracker.recordUsage({ route: 'WORKER_LOCAL', model: completion.model, reason: attempt === 0 ? 'SUBAGENT_DELEGATION' : 'SUBAGENT_DELEGATION_RETRY', promptTokens: completion.promptTokens, completionTokens: completion.completionTokens, totalTokens: completion.totalTokens, turn: Date.now() + attempt, accepted: !failed });
+        if (!failed) savedUSD = parseFloat((savedUSD + record.savedUSD).toFixed(6));
+      }
       if (!failed) {
-        return { success: true, status: 'SUCCESS', filesWritten: filesWritten.map(file => file.relativeName), missingFiles, testResults, tokens, savedUSD, benchmark, routingDecision, operationalMetrics: finalizeMetrics!(filesWritten.map(file => fs.readFileSync(file.path, 'utf8'))), ledgerPath };
+        const receipt = { success: true, status: options.dryRun ? 'DRY_RUN' : 'SUCCESS', filesWritten: filesWritten.map(file => file.relativeName), missingFiles, testResults, verification: { passed: testResults.passed, testOutput: testResults.output }, tokens, savedUSD, benchmark, routingDecision, operationalMetrics: finalizeMetrics!(options.dryRun ? [] : filesWritten.map(file => fs.readFileSync(file.path, 'utf8'))), ledgerPath, ...(options.dryRun ? { diff } : {}), ...(options.verbose ? { rawGeneratedBlocks: rawOutput, promptPayload } : {}), ...executionMetadata() };
+        return { ...receipt, formattedReport: formatWorkerReport(receipt) };
       }
       const reason = parseError || (missingFiles.length ? 'Missing target files: ' + missingFiles.join(', ') : testResults.output || 'Verification failed.');
       if (attempt === 0) {
@@ -475,7 +573,8 @@ export async function delegateWorker(input: DelegateWorkerParams) {
         continue;
       }
       const finalStatus = missingFiles.length ? 'MISSING_FILES' : testResults.status === 'failed' ? 'VERIFICATION_FAILED' : 'ERROR';
-      return { success: false, status: finalStatus, message: reason + (rawOutput ? ' Raw output preview: ' + rawOutput.slice(0, 300) : ''), filesWritten: filesWritten.map(file => file.relativeName), missingFiles, testResults, tokens, savedUSD, benchmark, routingDecision, operationalMetrics: finalizeMetrics!([]), ledgerPath };
+      const receipt = { success: false, status: finalStatus, message: reason + (rawOutput ? ' Raw output preview: ' + rawOutput.slice(0, 300) : ''), filesWritten: filesWritten.map(file => file.relativeName), missingFiles, testResults, verification: { passed: testResults.passed, testOutput: testResults.output }, tokens, savedUSD, benchmark, routingDecision, operationalMetrics: finalizeMetrics!([]), ledgerPath, ...executionMetadata() };
+      return { ...receipt, formattedReport: formatWorkerReport(receipt) };
     }
     throw new Error('Worker retry loop ended unexpectedly.');
   } catch (error) {
@@ -485,8 +584,26 @@ export async function delegateWorker(input: DelegateWorkerParams) {
         tracker.recordOperationalMetrics(operationalMetrics);
       } catch { /* Preserve the primary worker error in the receipt. */ }
     }
+    if (isConnectionRefused(error) && !process.env.WORKER_API_KEY && !process.env.DEEPSEEK_API_KEY && !PROFILES.WORKER.apiKey) {
+      const receipt = {
+        success: false,
+        status: 'NO_WORKER_AVAILABLE',
+        error: 'NO_WORKER_AVAILABLE',
+        message: 's1-precog could not reach a worker. Either:\n1. Start LM Studio on http://127.0.0.1:1234 (Local Mode)\n2. Set WORKER_API_KEY in your Codex MCP settings (Cloud Mode)',
+        filesWritten: filesWritten.map(file => file.relativeName),
+        tokens,
+        savedUSD,
+        benchmark,
+        routingDecision,
+        operationalMetrics,
+        ledgerPath,
+        ...executionMetadata(),
+      };
+      return { ...receipt, formattedReport: formatWorkerReport(receipt) };
+    }
     const message = errorMessage(error);
-    return { success: false, status: 'ERROR', message: message + (rawOutput && /parse|file|verification|truncated/i.test(message) ? ' Raw output preview: ' + rawOutput.slice(0, 300) : ''), filesWritten: filesWritten.map(file => file.relativeName), tokens, savedUSD, benchmark, routingDecision, operationalMetrics, ledgerPath };
+    const receipt = { success: false, status: 'ERROR', message: message + (rawOutput && /parse|file|verification|truncated/i.test(message) ? ' Raw output preview: ' + rawOutput.slice(0, 300) : ''), filesWritten: filesWritten.map(file => file.relativeName), tokens, savedUSD, benchmark, routingDecision, operationalMetrics, ledgerPath, ...executionMetadata() };
+    return { ...receipt, formattedReport: formatWorkerReport(receipt) };
   } finally {
     if (stagingDir) {
       try { removePathWithRetry(stagingDir); } catch (cleanupError) { console.error('Unable to clean staging directory: ' + errorMessage(cleanupError)); }
@@ -503,7 +620,8 @@ export function createServer(): Server {
     const work = queue.then(async () => {
       if (request.params.name !== 'delegate_worker') return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ success: false, status: 'ERROR', message: `Unknown tool: ${request.params.name}` }) }] };
       const receipt = await delegateWorker(request.params.arguments as unknown as DelegateWorkerParams);
-      return { isError: !receipt.success, content: [{ type: 'text' as const, text: JSON.stringify(receipt) }] };
+      const report = 'formattedReport' in receipt && typeof receipt.formattedReport === 'string' ? receipt.formattedReport : undefined;
+      return { isError: !receipt.success, content: [{ type: 'text' as const, text: JSON.stringify(receipt) }, ...(report ? [{ type: 'text' as const, text: report }] : [])] };
     });
     queue = work.then(() => undefined, () => undefined);
     return work;

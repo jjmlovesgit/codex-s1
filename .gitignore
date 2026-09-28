@@ -6,6 +6,8 @@ savings-ledger.json.*.tmp
 *.log
 .codex-stage/
 .precog-stage/
+.precog-docker/
+.s1-precog-docker/
 .DS_Store
 *.tgz
 
